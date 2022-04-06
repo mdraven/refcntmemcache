@@ -280,3 +280,57 @@ func TestThreadSafeTest(t *testing.T) {
 
 	assert.Nil(t, cache.Close())
 }
+
+func TestCheckMove(t *testing.T) {
+	cache := refcntmemcache.New[int, testType](time.Millisecond*100, 10)
+
+	func1 := func() refcntmemcache.Handle[testType] {
+		handle1, _ := cache.Set(1, &testType{"value1"})
+		defer handle1.Put()
+
+		handle2 := handle1.Move()
+		defer handle2.Put()
+
+		assert.Nil(t, handle1.Get())
+		assert.Equal(t, "value1", handle2.Get().value)
+
+		return handle2.Move()
+	}
+
+	handle1 := func1()
+	assert.Equal(t, "value1", handle1.Get().value)
+
+	handle1.Put()
+
+	time.Sleep(time.Millisecond * 200)
+
+	handle2 := cache.Get(1)
+	assert.Nil(t, handle2.Get())
+}
+
+func TestCheckCopy(t *testing.T) {
+	cache := refcntmemcache.New[int, testType](time.Millisecond*100, 10)
+
+	func1 := func() refcntmemcache.Handle[testType] {
+		handle1, _ := cache.Set(1, &testType{"value1"})
+		defer handle1.Put()
+
+		handle2 := handle1.Copy()
+		defer handle2.Put()
+
+		assert.Equal(t, "value1", handle1.Get().value)
+		assert.Equal(t, "value1", handle2.Get().value)
+
+		return handle2.Copy()
+	}
+
+	handle1 := func1()
+	assert.Equal(t, "value1", handle1.Get().value)
+
+	handle1.Put()
+
+	time.Sleep(time.Millisecond * 200)
+
+	handle2 := cache.Get(1)
+	assert.Nil(t, handle2.Get())
+}

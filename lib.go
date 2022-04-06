@@ -19,6 +19,7 @@ const (
 // Без этого интерфейса придётся или тащить Key в Handle или Mutex в каждый cacheDatum
 type keylessRefCntMemCache[Value any] interface {
 	put(handle *Handle[Value])
+	copy(handle *Handle[Value]) Handle[Value]
 }
 
 type listLinks[Value any] struct {
@@ -129,7 +130,25 @@ func (handle *Handle[Value]) Get() *Value {
 }
 
 func (handle *Handle[Value]) Put() {
-	handle.keylessRefCntMemCache.put(handle)
+	if handle.keylessRefCntMemCache != nil && handle.cacheDatum != nil {
+		handle.keylessRefCntMemCache.put(handle)
+	}
+}
+
+func (handle *Handle[Value]) Move() (ret Handle[Value]) {
+	ret = Handle[Value]{keylessRefCntMemCache: handle.keylessRefCntMemCache, cacheDatum: handle.cacheDatum, value: handle.value}
+
+	handle.cacheDatum = nil
+	handle.value = nil
+	return
+}
+
+func (handle *Handle[Value]) Copy() Handle[Value] {
+	if handle.keylessRefCntMemCache != nil && handle.cacheDatum != nil {
+		return handle.keylessRefCntMemCache.copy(handle)
+	} else {
+		return Handle[Value]{}
+	}
 }
 
 func New[Key comparable, Value any](lifetime time.Duration, maxElements int) *RefCntMemCache[Key, Value] {
@@ -262,15 +281,19 @@ func (rcmc *RefCntMemCache[Key, Value]) freeValuesToDelete(byTime, byMaxElements
 }
 
 func (rcmc *RefCntMemCache[Key, Value]) put(handle *Handle[Value]) {
+	cacheDatum := handle.cacheDatum
+	handle.cacheDatum = nil
+	handle.value = nil
+
+	if cacheDatum == nil {
+		return
+	}
+
 	isListChanged := func() bool {
 		rcmc.mut.Lock()
 		defer rcmc.mut.Unlock()
 
-		cacheDatum := handle.cacheDatum
-		handle.cacheDatum = nil
-		handle.value = nil
-
-		if cacheDatum == nil || cacheDatum.counter == 0 {
+		if cacheDatum.counter == 0 {
 			return false
 		}
 
@@ -292,6 +315,23 @@ func (rcmc *RefCntMemCache[Key, Value]) put(handle *Handle[Value]) {
 	}
 
 	return
+}
+
+func (rcmc *RefCntMemCache[Key, Value]) copy(handle *Handle[Value]) Handle[Value] {
+	if handle.cacheDatum == nil {
+		return Handle[Value]{}
+	}
+
+	rcmc.mut.Lock()
+	defer rcmc.mut.Unlock()
+
+	if handle.cacheDatum.counter == 0 {
+		panic("counter cannot be 0 at this location")
+	}
+
+	handle.cacheDatum.counter++
+
+	return Handle[Value]{noCopy{}, rcmc, handle.cacheDatum, handle.value}
 }
 
 func (rcmc *RefCntMemCache[Key, Value]) Get(key Key) (handle Handle[Value]) {
