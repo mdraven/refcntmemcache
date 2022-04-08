@@ -19,9 +19,9 @@ const (
 )
 
 // Без этого интерфейса придётся или тащить Key в Handle или Mutex в каждый cacheDatum
-type keylessRefCntMemCache[Value any] interface {
-	put(cacheDatum *cacheDatum[Value])
-	copy(cacheDatum *cacheDatum[Value])
+type keylessRefCntMemCache interface {
+	put(cacheDatum interface{} /* *cacheDatum[Value] */)
+	copy(cacheDatum interface{} /* *cacheDatum[Value] */)
 }
 
 type listLinks[Value any] struct {
@@ -120,19 +120,19 @@ func (*noCopy) Lock() {}
 func (*noCopy) Unlock() {}
 
 // Handle и его методы безопасно использовать только из одной нити.
-type Handle[HandleValue, Value any] struct {
+type Handle[Value any] struct {
 	noCopy
 	id                    handleId
-	keylessRefCntMemCache keylessRefCntMemCache[Value]
-	cacheDatum            *cacheDatum[Value]
-	value                 *HandleValue
+	keylessRefCntMemCache keylessRefCntMemCache
+	cacheDatum            interface{} //*cacheDatum[Value]
+	value                 *Value
 }
 
-func (handle *Handle[HandleValue, Value]) Get() *HandleValue {
+func (handle *Handle[Value]) Get() *Value {
 	return handle.value
 }
 
-func (handle *Handle[HandleValue, Value]) Put() {
+func (handle *Handle[Value]) Put() {
 	if handle.keylessRefCntMemCache != nil && handle.cacheDatum != nil {
 		cacheDatum := handle.cacheDatum
 
@@ -145,27 +145,27 @@ func (handle *Handle[HandleValue, Value]) Put() {
 	}
 }
 
-func (handle *Handle[HandleValue, Value]) Move() (ret Handle[HandleValue, Value]) {
-	ret, _ = MoveMap(handle, func(v *HandleValue) (*HandleValue, error) {
+func (handle *Handle[Value]) Move() (ret Handle[Value]) {
+	ret, _ = MoveMap(handle, func(v *Value) (*Value, error) {
 		return v, nil
 	})
 	return
 }
 
-func (handle *Handle[HandleValue, Value]) Copy() (ret Handle[HandleValue, Value]) {
-	ret, _ = CopyMap(handle, func(v *HandleValue) (*HandleValue, error) {
+func (handle *Handle[Value]) Copy() (ret Handle[Value]) {
+	ret, _ = CopyMap(handle, func(v *Value) (*Value, error) {
 		return v, nil
 	})
 	return
 }
 
-func MoveMap[OldHandleValue, NewHandleValue, Value any](handle *Handle[OldHandleValue, Value], trans func(*OldHandleValue) (*NewHandleValue, error)) (ret Handle[NewHandleValue, Value], err error) {
+func MoveMap[OldValue, NewValue any](handle *Handle[OldValue], trans func(*OldValue) (*NewValue, error)) (ret Handle[NewValue], err error) {
 	value, err := trans(handle.value)
 	if err != nil {
-		return Handle[NewHandleValue, Value]{}, err
+		return Handle[NewValue]{}, err
 	}
 
-	ret = Handle[NewHandleValue, Value]{id: handle.id, keylessRefCntMemCache: handle.keylessRefCntMemCache, cacheDatum: handle.cacheDatum, value: value}
+	ret = Handle[NewValue]{id: handle.id, keylessRefCntMemCache: handle.keylessRefCntMemCache, cacheDatum: handle.cacheDatum, value: value}
 
 	handle.id = getDefaultHandleId()
 	handle.cacheDatum = nil
@@ -174,18 +174,18 @@ func MoveMap[OldHandleValue, NewHandleValue, Value any](handle *Handle[OldHandle
 	return
 }
 
-func CopyMap[OldHandleValue, NewHandleValue, Value any](handle *Handle[OldHandleValue, Value], trans func(*OldHandleValue) (*NewHandleValue, error)) (ret Handle[NewHandleValue, Value], err error) {
+func CopyMap[OldValue, NewValue any](handle *Handle[OldValue], trans func(*OldValue) (*NewValue, error)) (ret Handle[NewValue], err error) {
 	if handle.keylessRefCntMemCache != nil && handle.cacheDatum != nil {
 		value, err := trans(handle.value)
 		if err != nil {
-			return Handle[NewHandleValue, Value]{}, err
+			return Handle[NewValue]{}, err
 		}
 
 		handle.keylessRefCntMemCache.copy(handle.cacheDatum)
 
-		return Handle[NewHandleValue, Value]{noCopy{}, registrateNewHandleId(), handle.keylessRefCntMemCache, handle.cacheDatum, value}, nil
+		return Handle[NewValue]{noCopy{}, registrateNewHandleId(), handle.keylessRefCntMemCache, handle.cacheDatum, value}, nil
 	} else {
-		return Handle[NewHandleValue, Value]{}, nil
+		return Handle[NewValue]{}, nil
 	}
 }
 
@@ -323,8 +323,10 @@ func (rcmc *RefCntMemCache[Key, Value]) freeValuesToDelete(byTime, byMaxElements
 	}
 }
 
-func (rcmc *RefCntMemCache[Key, Value]) put(cacheDatum *cacheDatum[Value]) {
-	if cacheDatum == nil {
+func (rcmc *RefCntMemCache[Key, Value]) put(cacheDatumInt interface{} /* *cacheDatum[Value] */) {
+	datum := cacheDatumInt.(*cacheDatum[Value])
+
+	if datum == nil {
 		return
 	}
 
@@ -332,17 +334,17 @@ func (rcmc *RefCntMemCache[Key, Value]) put(cacheDatum *cacheDatum[Value]) {
 		rcmc.mut.Lock()
 		defer rcmc.mut.Unlock()
 
-		if cacheDatum.counter == 0 {
+		if datum.counter == 0 {
 			return false
 		}
 
-		cacheDatum.counter--
+		datum.counter--
 
-		if cacheDatum.counter > 0 {
+		if datum.counter > 0 {
 			return false
 		}
 
-		cacheDatum.insertToList(&rcmc.valuesToDelete.first, &rcmc.valuesToDelete.last, rcmc.lifetime > 0)
+		datum.insertToList(&rcmc.valuesToDelete.first, &rcmc.valuesToDelete.last, rcmc.lifetime > 0)
 
 		rcmc.freeValuesToDelete(false, true)
 
@@ -356,23 +358,25 @@ func (rcmc *RefCntMemCache[Key, Value]) put(cacheDatum *cacheDatum[Value]) {
 	return
 }
 
-func (rcmc *RefCntMemCache[Key, Value]) copy(cacheDatum *cacheDatum[Value]) {
-	if cacheDatum == nil {
+func (rcmc *RefCntMemCache[Key, Value]) copy(cacheDatumInt interface{} /* *cacheDatum[Value] */) {
+	datum := cacheDatumInt.(*cacheDatum[Value])
+
+	if datum == nil {
 		return
 	}
 
 	rcmc.mut.Lock()
 	defer rcmc.mut.Unlock()
 
-	if cacheDatum.counter == 0 {
+	if datum.counter == 0 {
 		panic("counter cannot be 0 at this location")
 	}
 
-	cacheDatum.counter++
+	datum.counter++
 }
 
-func (rcmc *RefCntMemCache[Key, Value]) Get(key Key) (handle Handle[Value, Value]) {
-	handle = Handle[Value, Value]{noCopy{}, getDefaultHandleId(), rcmc, nil, nil}
+func (rcmc *RefCntMemCache[Key, Value]) Get(key Key) (handle Handle[Value]) {
+	handle = Handle[Value]{noCopy{}, getDefaultHandleId(), rcmc, nil, nil}
 
 	isListChanged := func() bool {
 		rcmc.mut.Lock()
@@ -403,7 +407,7 @@ func (rcmc *RefCntMemCache[Key, Value]) Get(key Key) (handle Handle[Value, Value
 	return
 }
 
-func (rcmc *RefCntMemCache[Key, Value]) Set(key Key, value *Value) (handle Handle[Value, Value], new bool) {
+func (rcmc *RefCntMemCache[Key, Value]) Set(key Key, value *Value) (handle Handle[Value], new bool) {
 	func() {
 		rcmc.mut.Lock()
 		defer rcmc.mut.Unlock()
@@ -415,7 +419,7 @@ func (rcmc *RefCntMemCache[Key, Value]) Set(key Key, value *Value) (handle Handl
 			new = true
 		}
 
-		handle = Handle[Value, Value]{noCopy{}, registrateNewHandleId(), rcmc, datum, datum.value}
+		handle = Handle[Value]{noCopy{}, registrateNewHandleId(), rcmc, datum, datum.value}
 		datum.counter++
 
 		// Обновляем время доступа и убираем из списка на удаление

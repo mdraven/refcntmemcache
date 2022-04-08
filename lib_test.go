@@ -284,7 +284,7 @@ func TestThreadSafeTest(t *testing.T) {
 func TestMove(t *testing.T) {
 	cache := refcntmemcache.New[int, testType](time.Millisecond*100, 10)
 
-	func1 := func() refcntmemcache.Handle[testType, testType] {
+	func1 := func() refcntmemcache.Handle[testType] {
 		handle1, _ := cache.Set(1, &testType{"value1"})
 		defer handle1.Put()
 
@@ -311,7 +311,7 @@ func TestMove(t *testing.T) {
 func TestCopy(t *testing.T) {
 	cache := refcntmemcache.New[int, testType](time.Millisecond*100, 10)
 
-	func1 := func() refcntmemcache.Handle[testType, testType] {
+	func1 := func() refcntmemcache.Handle[testType] {
 		handle1, _ := cache.Set(1, &testType{"value1"})
 		defer handle1.Put()
 
